@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>首页 - 用户管理系统</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">用户管理系统</div>
+        <div class="nav-menu">
+            {% if username %}
+            <span class="nav-welcome">欢迎，{{ username }}</span>
+            <a href="/logout" class="nav-link">退出</a>
+            {% else %}
+            <a href="/login" class="nav-link">登录</a>
+            {% endif %}
+        </div>
+    </nav>
+
+    <main class="container">
+        {% if username and user %}
+        <div class="card">
+            <h2 class="card-title">欢迎回来，{{ username }}！</h2>
+            <ul class="info-list">
+                <li><span class="info-label">用户名：</span>{{ username }}</li>
+                <li><span class="info-label">邮箱：</span>{{ user.email }}</li>
+                <li><span class="info-label">手机：</span>{{ user.phone }}</li>
+                <li><span class="info-label">角色：</span>{{ user.role }}</li>
+                <li><span class="info-label">余额：</span>{{ user.balance }}</li>
+            </ul>
+            <hr style="margin: 20px 0; border: none; border-top: 1px solid #eee;">
+            <h3>修改密码</h3>
+            <form method="POST" action="/change-password" class="password-form" style="margin-top: 12px;">
+                <div class="form-group">
+                    <label for="old_password">旧密码</label>
+                    <input type="password" id="old_password" name="old_password" class="form-input" placeholder="请输入旧密码" required>
+                </div>
+                <div class="form-group">
+                    <label for="new_password">新密码</label>
+                    <input type="password" id="new_password" name="new_password" class="form-input" placeholder="至少8位，包含大小写字母和数字" required>
+                </div>
+                <button type="submit" class="btn btn-primary">修改密码</button>
+                <span id="pw-msg" style="margin-left: 10px; font-size: 13px;"></span>
+            </form>
+            <div style="margin-top: 16px;">
+                <a href="/logout" class="btn btn-secondary">退出登录</a>
+            </div>
+        </div>
+        {% else %}
+        <div class="card">
+            <h2 class="card-title">请先登录</h2>
+            <p class="text-muted">您需要登录后才能访问用户信息。</p>
+            <a href="/login" class="btn btn-primary">前往登录</a>
+        </div>
+        {% endif %}
+    </main>
+
+    <script>
+    document.querySelector('.password-form')?.addEventListener('submit', async function(e) {
+        e.preventDefault();
+        const form = e.target;
+        const msg = document.getElementById('pw-msg');
+        const btn = form.querySelector('button[type="submit"]');
+
+        // 前端密码强度检查
+        const newPw = form.querySelector('[name="new_password"]').value;
+        if (newPw.length < 8) { msg.style.color = '#e74c3c'; msg.textContent = '密码至少8位'; return; }
+        if (!/[A-Z]/.test(newPw)) { msg.style.color = '#e74c3c'; msg.textContent = '需要大写字母'; return; }
+        if (!/[a-z]/.test(newPw)) { msg.style.color = '#e74c3c'; msg.textContent = '需要小写字母'; return; }
+        if (!/[0-9]/.test(newPw)) { msg.style.color = '#e74c3c'; msg.textContent = '需要数字'; return; }
+
+        btn.disabled = true;
+        btn.textContent = '提交中...';
+
+        const formData = new FormData(form);
+        // 添加 CSRF token
+        formData.append('csrf_token', '{{ session.get("csrf_token", "") }}');
+
+        try {
+            const resp = await fetch('/change-password', { method: 'POST', body: formData });
+            const data = await resp.json();
+            if (resp.ok) {
+                msg.style.color = '#27ae60';
+                msg.textContent = '✅ 密码修改成功！';
+                form.querySelector('[name="old_password"]').value = '';
+                form.querySelector('[name="new_password"]').value = '';
+            } else {
+                msg.style.color = '#e74c3c';
+                msg.textContent = '❌ ' + (data.error || '修改失败');
+            }
+        } catch(e) {
+            msg.style.color = '#e74c3c';
+            msg.textContent = '❌ 网络错误';
+        }
+        btn.disabled = false;
+        btn.textContent = '修改密码';
+    });
+    </script>
+</body>
+</html>
