@@ -20,23 +20,57 @@
             {% if error %}
             <div class="error-message">{{ error }}</div>
             {% endif %}
+            {% if request.args.get('msg') %}
+            <div class="success-message">{{ request.args.get('msg') }}</div>
+            {% endif %}
+
+            {% if rate_limited %}
+            <div class="rate-limit-overlay">
+                <div class="lock-icon">🔒</div>
+                <h3>登录已锁定</h3>
+                <p>失败次数过多，请等待 <span id="countdown">{{ retry_after }}</span> 秒后重试</p>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progress-fill" style="animation-duration: {{ retry_after }}s;"></div>
+                </div>
+            </div>
+            {% endif %}
+
             <form method="POST" action="/login" class="login-form">
                 <!-- CSRF 保护隐藏字段 -->
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <div class="form-group">
                     <label for="username">用户名</label>
-                    <input type="text" id="username" name="username" class="form-input" placeholder="请输入用户名" required>
+                    <input type="text" id="username" name="username" class="form-input" placeholder="请输入用户名" required {% if rate_limited %}disabled{% endif %}>
                 </div>
                 <div class="form-group">
                     <label for="password">密码</label>
-                    <input type="password" id="password" name="password" class="form-input" placeholder="请输入密码" required>
+                    <input type="password" id="password" name="password" class="form-input" placeholder="请输入密码" required {% if rate_limited %}disabled{% endif %}>
                 </div>
-                <button type="submit" class="btn btn-primary btn-full">登 录</button>
+                <button type="submit" class="btn btn-primary btn-full" {% if rate_limited %}disabled{% endif %}>登 录</button>
             </form>
             <p style="margin-top: 16px; font-size: 12px; color: #999; text-align: center;">
                 连续 5 次失败将锁定 1 分钟 · 所有密码经过哈希保护
             </p>
         </div>
     </main>
+
+{% if rate_limited %}
+<script>
+(function() {
+    var seconds = {{ retry_after }};
+    var cd = document.getElementById('countdown');
+    var fill = document.getElementById('progress-fill');
+    var timer = setInterval(function() {
+        seconds--;
+        if (cd) cd.textContent = seconds;
+        if (fill) fill.style.width = (seconds / {{ retry_after }} * 100) + '%';
+        if (seconds <= 0) {
+            clearInterval(timer);
+            location.reload();
+        }
+    }, 1000);
+})();
+</script>
+{% endif %}
 </body>
 </html>

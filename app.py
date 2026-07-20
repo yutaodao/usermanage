@@ -1,50 +1,111 @@
-from flask import Flask, render_template, request, redirect, session, jsonify
+from flask import Flask, render_template, request, redirect, session, jsonify, url_for
 from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
 import os
+import re
 import time
+import sqlite3
+import secrets
 from datetime import timedelta
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-key-2025-insecure-change-in-production")
-app.permanent_session_lifetime = timedelta(hours=2)  # Session 2 小时过期
+app.permanent_session_lifetime = timedelta(hours=2)
+
+# Session Cookie 安全属性
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+    SESSION_COOKIE_SECURE=False,       # 生产环境应设为 True（HTTPS）
+)
 
 # ============================================================
-# 用户数据库（密码使用 werkzeug 哈希存储）
+# SQLite 数据库初始化
 # ============================================================
-USERS = {
-    "admin": {
-        "password": generate_password_hash("Admin@2025#Secure"),  # 强密码
-        "role": "admin",
-        "email": "admin@example.com",
-        "phone": "13800138000",
-        "balance": 99999
-    },
-    "alice": {
-        "password": generate_password_hash("Alice@2025#Secure"),
-        "role": "user",
-        "email": "alice@example.com",
-        "phone": "13900139001",
-        "balance": 100
-    }
-}
+def init_db():
+    """初始化 SQLite 数据库，创建 users 表并插入默认用户。"""
+    os.makedirs('data', exist_ok=True)
+    conn = sqlite3.connect('data/users.db')
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT UNIQUE NOT NULL,
+        password TEXT NOT NULL,
+        email TEXT,
+        phone TEXT,
+        role TEXT DEFAULT 'user',
+        balance INTEGER DEFAULT 0
+    )''')
+    # 插入默认用户（密码哈希存储）
+    c.execute("INSERT OR IGNORE INTO users (username, password, email, phone, role, balance) VALUES (?, ?, ?, ?, ?, ?)",
+              ('admin', generate_password_hash("Admin@2025#Secure"), 'admin@example.com', '13800138000', 'admin', 99999))
+    c.execute("INSERT OR IGNORE INTO users (username, password, email, phone, role, balance) VALUES (?, ?, ?, ?, ?, ?)",
+              ('alice', generate_password_hash("Alice@2025#Secure"), 'alice@example.com', '13900139001', 'user', 100))
+    conn.commit()
+    conn.close()
+    print("[DB] 数据库初始化完成（密码已哈希存储）")
+
+
+def get_db_user(username):
+    """从 SQLite 查询用户信息。"""
+    conn = sqlite3.connect('data/users.db')
+    c = conn.cursor()
+    c.execute("SELECT id, username, password, email, phone, role, balance FROM users WHERE username = ?", (username,))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        return {
+            'id': row[0], 'username': row[1], 'password': row[2],
+            'email': row[3], 'phone': row[4], 'role': row[5], 'balance': row[6]
+        }
+    return None
+
+
+def get_all_users():
+    """获取所有用户（不含密码字段）。"""
+    conn = sqlite3.connect('data/users.db')
+    c = conn.cursor()
+    c.execute("SELECT id, username, email, phone, role, balance FROM users")
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
 
 # ============================================================
 # 登录频率限制（内存实现，防止暴力破解）
 # ============================================================
 LOGIN_ATTEMPTS = {}  # {ip: [timestamp1, timestamp2, ...]}
 
-def check_login_rate_limit(ip: str) -> bool:
-    """检查登录频率，同一 IP 1 分钟内最多尝试 5 次。"""
+def check_login_rate_limit(ip: str) -> tuple:
+    """检查登录频率，同一 IP 1 分钟内最多尝试 5 次。
+    第 5 次失败立即锁定，倒计时 60 秒从第 5 次失败开始算起。
+    返回 (allowed: bool, retry_after: int)。"""
     now = time.time()
     if ip not in LOGIN_ATTEMPTS:
         LOGIN_ATTEMPTS[ip] = []
-    # 清除 1 分钟前的记录
     LOGIN_ATTEMPTS[ip] = [t for t in LOGIN_ATTEMPTS[ip] if now - t < 60]
     if len(LOGIN_ATTEMPTS[ip]) >= 5:
-        return False  # 超出限制
+        lock_time = LOGIN_ATTEMPTS[ip][-1]
+        retry_after = int(60 - (now - lock_time))
+        return (False, max(retry_after, 1))
     LOGIN_ATTEMPTS[ip].append(now)
-    return True
+    if len(LOGIN_ATTEMPTS[ip]) >= 5:
+        return (False, 60)
+    return (True, 0)
+
+
+REGISTER_ATTEMPTS = {}
+
+def check_register_rate_limit(ip: str) -> tuple:
+    """注册频率限制，同一 IP 1 分钟内最多注册 3 次。"""
+    now = time.time()
+    if ip not in REGISTER_ATTEMPTS:
+        REGISTER_ATTEMPTS[ip] = []
+    REGISTER_ATTEMPTS[ip] = [t for t in REGISTER_ATTEMPTS[ip] if now - t < 60]
+    if len(REGISTER_ATTEMPTS[ip]) >= 3:
+        return (False, 30)
+    REGISTER_ATTEMPTS[ip].append(now)
+    return (True, 0)
 
 
 # ============================================================
@@ -56,22 +117,58 @@ def add_security_headers(response):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-XSS-Protection"] = "1; mode=block"
     response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    # 防止搜索反射内容被当作脚本执行
+    response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self' 'unsafe-inline'"
     return response
 
 
 # ============================================================
-# CSRF 保护
+# CSRF 保护（覆盖所有 POST 请求，包括 /login）
 # ============================================================
-import secrets
-
 @app.before_request
 def csrf_protect():
     if request.method == "POST":
-        # 对 /login 以外的 POST 请求检查 CSRF token
-        if request.endpoint != "login":
-            token = request.form.get("csrf_token", "")
-            if not token or token != session.get("csrf_token"):
-                return "CSRF Token 无效", 400
+        token = request.form.get("csrf_token", "")
+        if not token or token != session.get("csrf_token"):
+            return "CSRF Token 无效", 400
+
+
+# ============================================================
+# 登录验证装饰器
+# ============================================================
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not session.get("username"):
+            return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+
+# ============================================================
+# 输入验证函数
+# ============================================================
+def validate_input(username, password, email, phone):
+    """验证注册/修改输入，返回 (is_valid, error_msg)。"""
+    if not username or len(username) < 2 or len(username) > 50:
+        return False, "用户名长度需在 2-50 位之间"
+    if not re.match(r'^[a-zA-Z0-9_一-龥]+$', username):
+        return False, "用户名只能包含字母、数字、下划线和中文"
+    if not password or len(password) < 6:
+        return False, "密码长度至少 6 位"
+    if email and email.strip():
+        email = email.strip()
+        if len(email) > 100:
+            return False, "邮箱地址过长"
+        if not re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', email):
+            return False, "邮箱格式不正确"
+    if phone and phone.strip():
+        phone = phone.strip()
+        if len(phone) > 20:
+            return False, "手机号过长"
+        if not re.match(r'^\+?[0-9\- ]{6,20}$', phone):
+            return False, "手机号格式不正确"
+    return True, ""
 
 
 # ============================================================
@@ -82,37 +179,62 @@ def csrf_protect():
 def index():
     username = session.get("username")
     user_info = None
-    if username and username in USERS:
-        user_info = USERS[username]
-    return render_template("index.html", username=username, user=user_info)
+    if username:
+        user_info = get_db_user(username)
+    # 从 URL 参数读取搜索结果（如果有）
+    search_keyword = request.args.get("keyword", "")
+    search_results = []
+    if search_keyword:
+        conn = sqlite3.connect('data/users.db')
+        c = conn.cursor()
+        sql = "SELECT id, username, email, phone, role, balance FROM users WHERE username LIKE ? OR email LIKE ?"
+        param = f'%{search_keyword}%'
+        try:
+            c.execute(sql, (param, param))
+            search_results = c.fetchall()
+        except Exception:
+            pass
+        finally:
+            conn.close()
+    return render_template("index.html", username=username, user=user_info,
+                           search_results=search_results, search_keyword=search_keyword)
 
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
-        # --- 1. 检查登录频率 ---
+        # --- 1. CSRF 检查（由 before_request 统一处理）---
+        # --- 2. 检查登录频率 ---
         client_ip = request.remote_addr or "unknown"
-        if not check_login_rate_limit(client_ip):
-            return render_template("login.html", error="登录过于频繁，请 1 分钟后再试"), 429
+        allowed, retry_after = check_login_rate_limit(client_ip)
+        if not allowed:
+            return render_template("login.html", error=f"登录过于频繁，请 {retry_after} 秒后再试",
+                                   rate_limited=True, retry_after=retry_after,
+                                   csrf_token=session.get("csrf_token", "")), 429
 
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "")
 
-        # --- 2. 验证用户存在 ---
-        user = USERS.get(username)
+        if not username or not password:
+            return render_template("login.html", error="用户名和密码不能为空",
+                                   csrf_token=session.get("csrf_token", ""))
+
+        # --- 3. 从 SQLite 查询用户 ---
+        user = get_db_user(username)
         if not user:
-            return render_template("login.html", error="用户名或密码错误")
+            return render_template("login.html", error="用户名或密码错误",
+                                   csrf_token=session.get("csrf_token", ""))
 
-        # --- 3. 密码哈希比对（不再使用明文 ==）---
+        # --- 4. 密码哈希比对 ---
         if not check_password_hash(user["password"], password):
-            return render_template("login.html", error="用户名或密码错误")
+            return render_template("login.html", error="用户名或密码错误",
+                                   csrf_token=session.get("csrf_token", ""))
 
-        # --- 4. 登录成功 ---
+        # --- 5. 登录成功 ---
         session.permanent = True
         session["username"] = username
         session["csrf_token"] = secrets.token_hex(32)
 
-        # 准备传递给模板的用户信息（⚠️ 不包含密码字段）
         user_info = {
             "username": username,
             "role": user["role"],
@@ -122,7 +244,7 @@ def login():
         }
         return render_template("index.html", username=username, user=user_info)
 
-    # GET 请求：生成 CSRF token
+    # GET 请求
     if "csrf_token" not in session:
         session["csrf_token"] = secrets.token_hex(32)
     return render_template("login.html", csrf_token=session["csrf_token"])
@@ -135,19 +257,98 @@ def logout():
 
 
 # ============================================================
-# 管理员重置密码接口（演示用，生产环境应加权限控制）
+# 用户注册
+# ============================================================
+@app.route("/register", methods=["GET", "POST"])
+def register():
+    if request.method == "POST":
+        client_ip = request.remote_addr or "unknown"
+        allowed, _ = check_register_rate_limit(client_ip)
+        if not allowed:
+            return render_template("register.html", error="注册过于频繁，请稍后再试",
+                                   csrf_token=session.get("csrf_token", ""))
+
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
+        email = request.form.get("email", "").strip()
+        phone = request.form.get("phone", "").strip()
+
+        # 输入校验
+        valid, err_msg = validate_input(username, password, email, phone)
+        if not valid:
+            return render_template("register.html", error=err_msg,
+                                   csrf_token=session.get("csrf_token", ""))
+
+        # 密码哈希后存储
+        hashed_pw = generate_password_hash(password)
+        conn = sqlite3.connect('data/users.db')
+        c = conn.cursor()
+        try:
+            c.execute("INSERT INTO users (username, password, email, phone) VALUES (?, ?, ?, ?)",
+                      (username, hashed_pw, email, phone))
+            conn.commit()
+            conn.close()
+            session["csrf_token"] = secrets.token_hex(32)
+            return redirect(url_for('login', msg='注册成功，请登录'))
+        except sqlite3.IntegrityError:
+            conn.close()
+            return render_template("register.html", error="用户名已存在",
+                                   csrf_token=session.get("csrf_token", ""))
+        except Exception:
+            conn.close()
+            return render_template("register.html", error="注册失败，请稍后重试",
+                                   csrf_token=session.get("csrf_token", ""))
+
+    # GET 请求
+    if "csrf_token" not in session:
+        session["csrf_token"] = secrets.token_hex(32)
+    return render_template("register.html", csrf_token=session["csrf_token"])
+
+
+# ============================================================
+# 用户搜索（需登录）
+# ============================================================
+@app.route("/search")
+@login_required
+def search():
+    keyword = request.args.get("keyword", "")
+    results = []
+    if keyword:
+        if len(keyword) > 100:
+            return redirect(url_for('index'))
+        conn = sqlite3.connect('data/users.db')
+        c = conn.cursor()
+        sql = "SELECT id, username, email, phone, role, balance FROM users WHERE username LIKE ? OR email LIKE ?"
+        param = f'%{keyword}%'
+        try:
+            c.execute(sql, (param, param))
+            results = c.fetchall()
+        except Exception:
+            pass
+        finally:
+            conn.close()
+
+    return redirect(url_for('index', keyword=keyword))
+
+
+# ============================================================
+# 修改密码
 # ============================================================
 @app.route("/change-password", methods=["POST"])
 def change_password():
     username = session.get("username")
-    if not username or username not in USERS:
+    if not username:
         return jsonify({"error": "未登录"}), 401
+
+    user = get_db_user(username)
+    if not user:
+        return jsonify({"error": "用户不存在"}), 404
 
     old_pw = request.form.get("old_password", "")
     new_pw = request.form.get("new_password", "")
 
     # 验证旧密码
-    if not check_password_hash(USERS[username]["password"], old_pw):
+    if not check_password_hash(user["password"], old_pw):
         return jsonify({"error": "旧密码错误"}), 403
 
     # 密码强度检查
@@ -160,11 +361,21 @@ def change_password():
     if not any(c.isdigit() for c in new_pw):
         return jsonify({"error": "新密码需要包含数字"}), 400
 
-    # 更新密码（哈希存储）
-    USERS[username]["password"] = generate_password_hash(new_pw)
+    # 同步更新 SQLite
+    hashed_pw = generate_password_hash(new_pw)
+    conn = sqlite3.connect('data/users.db')
+    c = conn.cursor()
+    c.execute("UPDATE users SET password = ? WHERE username = ?", (hashed_pw, username))
+    conn.commit()
+    conn.close()
+
     return jsonify({"message": "密码修改成功"})
 
 
+# ============================================================
+# 启动入口
+# ============================================================
 if __name__ == "__main__":
+    init_db()
     debug_mode = os.environ.get("FLASK_DEBUG", "0") == "1"
     app.run(debug=debug_mode, host="0.0.0.0", port=5000)
