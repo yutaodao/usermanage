@@ -323,3 +323,36 @@ ul {
     background: #fafbfc;
     border-radius: 6px;
 }
+
+/* ===== Upload ===== */
+.upload-preview {
+    text-align: center;
+    padding: 20px 0;
+}
+
+.preview-img {
+    max-width: 200px;
+    max-height: 200px;
+    border-radius: 50%;
+    border: 3px solid #667eea;
+    object-fit: cover;
+    box-shadow: 0 2px 12px rgba(102, 126, 234, 0.3);
+}
+
+.upload-file-info {
+    margin-top: 10px;
+    font-size: 13px;
+    color: #888;
+    word-break: break-all;
+}
+
+.upload-file-info a {
+    color: #667eea;
+    text-decoration: underline;
+}
+
+/* ===== File Input ===== */
+input[type="file"].form-input {
+    padding: 8px;
+    font-size: 13px;
+}

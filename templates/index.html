@@ -12,6 +12,7 @@
         <div class="nav-menu">
             {% if username %}
             <span class="nav-welcome">欢迎，{{ username }}</span>
+            <a href="/upload" class="nav-link">上传头像</a>
             <a href="/logout" class="nav-link">退出</a>
             {% else %}
             <a href="/login" class="nav-link">登录</a>
@@ -31,6 +32,9 @@
                 <li><span class="info-label">角色：</span>{{ user.role }}</li>
                 <li><span class="info-label">余额：</span>{{ user.balance }}</li>
             </ul>
+            <div style="margin-top: 16px;">
+                <a href="/upload" class="btn btn-outline" style="font-size: 13px; padding: 6px 16px;">📷 上传头像</a>
+            </div>
         </div>
 
         <!-- 搜索功能 -->

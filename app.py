@@ -19,6 +19,9 @@ app.config.update(
     SESSION_COOKIE_SECURE=False,       # 生产环境应设为 True（HTTPS）
 )
 
+# 上传文件大小限制
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB
+
 # ============================================================
 # SQLite 数据库初始化
 # ============================================================
@@ -108,6 +111,41 @@ def check_register_rate_limit(ip: str) -> tuple:
     return (True, 0)
 
 
+UPLOAD_ATTEMPTS = {}
+
+def check_upload_rate_limit(ip: str) -> tuple:
+    """上传频率限制，同一 IP 1 分钟内最多上传 10 次。"""
+    now = time.time()
+    if ip not in UPLOAD_ATTEMPTS:
+        UPLOAD_ATTEMPTS[ip] = []
+    UPLOAD_ATTEMPTS[ip] = [t for t in UPLOAD_ATTEMPTS[ip] if now - t < 60]
+    if len(UPLOAD_ATTEMPTS[ip]) >= 10:
+        return (False, 10)
+    UPLOAD_ATTEMPTS[ip].append(now)
+    return (True, 0)
+
+
+# 允许上传的图片后缀
+ALLOWED_EXTENSIONS = {'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'}
+
+def allowed_file(filename):
+    """检查文件后缀是否在允许列表中。"""
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+def safe_filename(filename, username):
+    """清洗文件名：防止路径穿越、去除危险字符、添加用户名前缀防止覆盖。"""
+    # 去除路径分隔符（防止 ../../etc/passwd）
+    filename = filename.replace('\\', '/')
+    filename = filename.split('/')[-1]
+    # 只保留安全的文件名字符
+    safe_name = re.sub(r'[^\w\.\-]', '_', filename)
+    # 限制文件名长度
+    safe_name = safe_name[:100]
+    # 添加用户名前缀防止覆盖
+    return f"{username}_{safe_name}"
+
+
 # ============================================================
 # 安全响应头中间件
 # ============================================================
@@ -118,7 +156,7 @@ def add_security_headers(response):
     response.headers["X-XSS-Protection"] = "1; mode=block"
     response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     # 防止搜索反射内容被当作脚本执行
-    response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self' 'unsafe-inline'"
+    response.headers["Content-Security-Policy"] = "default-src 'self'; img-src 'self' data:; script-src 'self' 'unsafe-inline'"
     return response
 
 
@@ -370,6 +408,65 @@ def change_password():
     conn.close()
 
     return jsonify({"message": "密码修改成功"})
+
+
+# ============================================================
+# 用户头像上传
+# ============================================================
+@app.route("/upload", methods=["GET", "POST"])
+@login_required
+def upload():
+    if request.method == "POST":
+        # --- 1. 上传频率限制 ---
+        client_ip = request.remote_addr or "unknown"
+        allowed, _ = check_upload_rate_limit(client_ip)
+        if not allowed:
+            return render_template("upload.html", error="上传过于频繁，请稍后再试",
+                                   csrf_token=session.get("csrf_token", ""))
+
+        # --- 2. 检查是否有文件上传 ---
+        if 'file' not in request.files:
+            return render_template("upload.html", error="未选择文件",
+                                   csrf_token=session.get("csrf_token", ""))
+
+        file = request.files['file']
+        if file.filename == '':
+            return render_template("upload.html", error="未选择文件",
+                                   csrf_token=session.get("csrf_token", ""))
+
+        # --- 3. 文件大小检查（单文件不超过 16MB）---
+        file.seek(0, os.SEEK_END)
+        file_size = file.tell()
+        file.seek(0)
+        if file_size > 16 * 1024 * 1024:
+            return render_template("upload.html", error="文件大小超过 16MB 限制",
+                                   csrf_token=session.get("csrf_token", ""))
+
+        # --- 4. 文件后缀白名单校验 ---
+        if not allowed_file(file.filename):
+            return render_template("upload.html", error="不支持的文件格式，仅允许图片文件（JPG/PNG/GIF/WEBP/BMP）",
+                                   csrf_token=session.get("csrf_token", ""))
+
+        # --- 5. 清洗文件名（防路径穿越 + 去特殊字符 + 加用户名前缀防覆盖）---
+        username = session.get("username")
+        safe_name = safe_filename(file.filename, username)
+
+        # --- 6. 保存文件 ---
+        upload_dir = os.path.join(app.root_path, 'static', 'uploads')
+        os.makedirs(upload_dir, exist_ok=True)
+        filepath = os.path.join(upload_dir, safe_name)
+        file.save(filepath)
+
+        # --- 7. 生成访问 URL ---
+        file_url = url_for('static', filename=f'uploads/{safe_name}')
+        return render_template("upload.html", success=True,
+                               file_url=file_url, filename=safe_name,
+                               csrf_token=session.get("csrf_token", ""))
+
+    # GET 请求
+    if "csrf_token" not in session:
+        session["csrf_token"] = secrets.token_hex(32)
+    return render_template("upload.html", csrf_token=session["csrf_token"])
 
 
 # ============================================================

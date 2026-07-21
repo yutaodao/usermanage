@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}上传头像 - 用户管理系统{% endblock %}
+{% block content %}
+<div class="card login-card">
+    <h2 class="card-title">上传头像</h2>
+
+    {% if error %}
+    <div class="error-message">{{ error }}</div>
+    {% endif %}
+
+    {% if success %}
+    <div class="success-message">上传成功！</div>
+    <div class="upload-preview">
+        <img src="{{ file_url }}" alt="头像预览" class="preview-img">
+        <p class="upload-file-info">文件名：{{ filename }}</p>
+        <p class="upload-file-info">访问链接：<a href="{{ file_url }}" target="_blank">{{ file_url }}</a></p>
+    </div>
+    <div style="margin-top: 20px; text-align: center;">
+        <a href="/upload" class="btn btn-outline">继续上传</a>
+        <a href="/" class="btn btn-primary" style="margin-left: 10px;">返回首页</a>
+    </div>
+    {% else %}
+    <form method="POST" action="/upload" enctype="multipart/form-data">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="form-group">
+            <label for="file">选择头像文件</label>
+            <input type="file" id="file" name="file" class="form-input" required>
+        </div>
+        <button type="submit" class="btn btn-primary btn-full">上 传</button>
+    </form>
+    <p style="margin-top: 16px; font-size: 13px; color: #999; text-align: center;">
+        仅支持 JPG、PNG、GIF、WEBP、BMP 格式，文件大小不超过 16MB
+    </p>
+    {% endif %}
+</div>
+{% endblock %}
