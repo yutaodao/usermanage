@@ -74,6 +74,21 @@ def get_all_users():
     return rows
 
 
+def get_user_by_id(user_id):
+    """根据 user_id 查询用户信息。"""
+    conn = sqlite3.connect('data/users.db')
+    c = conn.cursor()
+    c.execute("SELECT id, username, email, phone, role, balance FROM users WHERE id = ?", (user_id,))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        return {
+            'id': row[0], 'username': row[1], 'email': row[2],
+            'phone': row[3], 'role': row[4], 'balance': row[5]
+        }
+    return None
+
+
 # ============================================================
 # 登录频率限制（内存实现，防止暴力破解）
 # ============================================================
@@ -271,6 +286,7 @@ def login():
         # --- 5. 登录成功 ---
         session.permanent = True
         session["username"] = username
+        session["user_id"] = user["id"]
         session["csrf_token"] = secrets.token_hex(32)
 
         user_info = {
@@ -467,6 +483,40 @@ def upload():
     if "csrf_token" not in session:
         session["csrf_token"] = secrets.token_hex(32)
     return render_template("upload.html", csrf_token=session["csrf_token"])
+
+
+# ============================================================
+# 个人中心（仅查看自己的资料）
+# ============================================================
+@app.route("/profile")
+@login_required
+def profile():
+    login_user_id = session.get("user_id")
+    user = get_user_by_id(login_user_id)
+    if not user:
+        return "用户不存在", 404
+    return render_template("profile.html", user=user)
+
+
+# ============================================================
+# 充值（仅给自己的账户充值）
+# ============================================================
+@app.route("/recharge", methods=["POST"])
+@login_required
+def recharge():
+    login_user_id = session.get("user_id")
+    amount = request.form.get("amount", type=float, default=0)
+
+    if amount <= 0:
+        return "充值金额必须大于 0", 400
+
+    conn = sqlite3.connect('data/users.db')
+    c = conn.cursor()
+    c.execute("UPDATE users SET balance = balance + ? WHERE id = ?", (amount, login_user_id))
+    conn.commit()
+    conn.close()
+
+    return redirect(url_for('profile'))
 
 
 # ============================================================
