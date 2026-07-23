@@ -520,6 +520,40 @@ def recharge():
 
 
 # ============================================================
+# 动态页面加载
+# ============================================================
+@app.route("/page")
+def dynamic_page():
+    name = request.args.get("name", "")
+    if not name:
+        return "页面不存在", 404
+
+    # 安全校验：防止路径穿越
+    # 只允许字母、数字、下划线、横线，拒绝 ../ 等路径符号
+    if not re.match(r'^[a-zA-Z0-9_\-一-龥]+$', name):
+        return "页面不存在", 404
+
+    # 限制在 pages/ 目录内，使用绝对路径
+    base_dir = os.path.join(app.root_path, 'pages')
+    filepath = os.path.join(base_dir, name + '.html')
+
+    if not os.path.isfile(filepath):
+        return "页面不存在", 404
+
+    # 额外校验：确保文件仍在 pages/ 目录下（防止符号链接攻击）
+    real_path = os.path.realpath(filepath)
+    real_base = os.path.realpath(base_dir)
+    if not real_path.startswith(real_base + os.sep) and real_path != real_base:
+        return "页面不存在", 404
+
+    with open(filepath, 'r', encoding='utf-8') as f:
+        content = f.read()
+
+    return render_template("index.html", username=session.get("username"),
+                           page_content=content)
+
+
+# ============================================================
 # 启动入口
 # ============================================================
 if __name__ == "__main__":
