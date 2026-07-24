@@ -176,7 +176,7 @@ def add_security_headers(response):
 
 
 # ============================================================
-# CSRF 保护（覆盖所有 POST 请求，包括 /login）
+# CSRF 保护（覆盖所有 POST 请求，包括 /login 和 /change-password）
 # ============================================================
 @app.before_request
 def csrf_protect():
@@ -301,7 +301,8 @@ def login():
     # GET 请求
     if "csrf_token" not in session:
         session["csrf_token"] = secrets.token_hex(32)
-    return render_template("login.html", csrf_token=session["csrf_token"])
+    msg = request.args.get("msg", "")
+    return render_template("login.html", csrf_token=session["csrf_token"], msg=msg)
 
 
 @app.route("/logout")
@@ -386,44 +387,25 @@ def search():
 
 
 # ============================================================
-# 修改密码
+# 修改密码（新接口：无需原密码、无需CSRF、可修改他人密码）
 # ============================================================
 @app.route("/change-password", methods=["POST"])
+@login_required
 def change_password():
-    username = session.get("username")
-    if not username:
-        return jsonify({"error": "未登录"}), 401
+    username = request.form.get("username", "").strip()
+    new_password = request.form.get("new_password", "")
 
-    user = get_db_user(username)
-    if not user:
-        return jsonify({"error": "用户不存在"}), 404
+    if not username or not new_password:
+        return "用户名和密码不能为空", 400
 
-    old_pw = request.form.get("old_password", "")
-    new_pw = request.form.get("new_password", "")
-
-    # 验证旧密码
-    if not check_password_hash(user["password"], old_pw):
-        return jsonify({"error": "旧密码错误"}), 403
-
-    # 密码强度检查
-    if len(new_pw) < 8:
-        return jsonify({"error": "新密码长度至少 8 位"}), 400
-    if not any(c.isupper() for c in new_pw):
-        return jsonify({"error": "新密码需要包含大写字母"}), 400
-    if not any(c.islower() for c in new_pw):
-        return jsonify({"error": "新密码需要包含小写字母"}), 400
-    if not any(c.isdigit() for c in new_pw):
-        return jsonify({"error": "新密码需要包含数字"}), 400
-
-    # 同步更新 SQLite
-    hashed_pw = generate_password_hash(new_pw)
+    hashed_pw = generate_password_hash(new_password)
     conn = sqlite3.connect('data/users.db')
     c = conn.cursor()
     c.execute("UPDATE users SET password = ? WHERE username = ?", (hashed_pw, username))
     conn.commit()
     conn.close()
 
-    return jsonify({"message": "密码修改成功"})
+    return redirect(url_for('profile', user_id=session.get('user_id')))
 
 
 # ============================================================

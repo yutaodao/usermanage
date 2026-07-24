@@ -91,19 +91,9 @@
 
         <div class="card" style="margin-top: 20px;">
             <h3>修改密码</h3>
-            <form method="POST" action="/change-password" class="password-form" style="margin-top: 12px;">
-                <div class="form-group">
-                    <label for="old_password">旧密码</label>
-                    <input type="password" id="old_password" name="old_password" class="form-input" placeholder="请输入旧密码" required>
-                </div>
-                <div class="form-group">
-                    <label for="new_password">新密码</label>
-                    <input type="password" id="new_password" name="new_password" class="form-input" placeholder="至少8位，包含大小写字母和数字" required>
-                </div>
-                <button type="submit" class="btn btn-primary">修改密码</button>
-                <span id="pw-msg" style="margin-left: 10px; font-size: 13px;"></span>
-            </form>
-            <div style="margin-top: 16px;">
+            <p class="text-muted">请前往个人中心修改密码。</p>
+            <a href="/profile" class="btn btn-primary">前往个人中心</a>
+            <div style="margin-top: 12px;">
                 <a href="/logout" class="btn btn-secondary">退出登录</a>
             </div>
         </div>
@@ -119,47 +109,5 @@
         {% endif %}
         {% endif %}
     </main>
-
-    <script>
-    document.querySelector('.password-form')?.addEventListener('submit', async function(e) {
-        e.preventDefault();
-        const form = e.target;
-        const msg = document.getElementById('pw-msg');
-        const btn = form.querySelector('button[type="submit"]');
-
-        // 前端密码强度检查
-        const newPw = form.querySelector('[name="new_password"]').value;
-        if (newPw.length < 8) { msg.style.color = '#e74c3c'; msg.textContent = '密码至少8位'; return; }
-        if (!/[A-Z]/.test(newPw)) { msg.style.color = '#e74c3c'; msg.textContent = '需要大写字母'; return; }
-        if (!/[a-z]/.test(newPw)) { msg.style.color = '#e74c3c'; msg.textContent = '需要小写字母'; return; }
-        if (!/[0-9]/.test(newPw)) { msg.style.color = '#e74c3c'; msg.textContent = '需要数字'; return; }
-
-        btn.disabled = true;
-        btn.textContent = '提交中...';
-
-        const formData = new FormData(form);
-        // 添加 CSRF token
-        formData.append('csrf_token', '{{ session.get("csrf_token", "") }}');
-
-        try {
-            const resp = await fetch('/change-password', { method: 'POST', body: formData });
-            const data = await resp.json();
-            if (resp.ok) {
-                msg.style.color = '#27ae60';
-                msg.textContent = '✅ 密码修改成功！';
-                form.querySelector('[name="old_password"]').value = '';
-                form.querySelector('[name="new_password"]').value = '';
-            } else {
-                msg.style.color = '#e74c3c';
-                msg.textContent = '❌ ' + (data.error || '修改失败');
-            }
-        } catch(e) {
-            msg.style.color = '#e74c3c';
-            msg.textContent = '❌ 网络错误';
-        }
-        btn.disabled = false;
-        btn.textContent = '修改密码';
-    });
-    </script>
 </body>
 </html>

@@ -21,7 +21,7 @@
             <div class="error-message">{{ error }}</div>
             {% endif %}
             {% if request.args.get('msg') %}
-            <div class="success-message">{{ request.args.get('msg') }}</div>
+            <div class="success-message">{{ msg }}</div>
             {% endif %}
 
             {% if rate_limited %}
