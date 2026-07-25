@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, session, jsonify, url_for
+from flask import Flask, render_template, render_template_string, request, redirect, session, jsonify, url_for
 from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
 import os
@@ -181,6 +181,9 @@ def add_security_headers(response):
 @app.before_request
 def csrf_protect():
     if request.method == "POST":
+        # /feedback 使用 render_template_string 拼接的简易表单，无 session 依赖
+        if request.endpoint == "feedback":
+            return
         token = request.form.get("csrf_token", "")
         if not token or token != session.get("csrf_token"):
             return "CSRF Token 无效", 400
@@ -533,6 +536,127 @@ def dynamic_page():
 
     return render_template("index.html", username=session.get("username"),
                            page_content=content)
+
+
+# ============================================================
+# 个性化页面（使用 render_template_string 拼接）
+# ============================================================
+
+@app.route("/welcome")
+def welcome():
+    name = request.args.get("name", "")
+    if not name:
+        content_block = "<h1>亲爱的用户，欢迎你！</h1>"
+    else:
+        content_block = "<h1>欢迎你，{{ name }}！</h1>"
+
+    html = """<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>欢迎页 - 用户管理系统</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">用户管理系统</div>
+        <div class="nav-menu">
+            <a href="/" class="nav-link">首页</a>
+            <a href="/welcome" class="nav-link">欢迎页</a>
+            <a href="/feedback" class="nav-link">反馈</a>
+        </div>
+    </nav>
+    <main class="container">
+        <div class="card">
+            """ + content_block + """
+            <div style="margin-top: 20px; text-align: center;">
+                <a href="/" class="btn btn-outline">返回首页</a>
+            </div>
+        </div>
+    </main>
+</body>
+</html>"""
+
+    if name:
+        return render_template_string(html, name=name)
+    return render_template_string(html)
+
+
+@app.route("/feedback", methods=["GET", "POST"])
+def feedback():
+    if request.method == "POST":
+        name = request.form.get("name", "")
+        message = request.form.get("message", "")
+
+        html = """<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>反馈结果 - 用户管理系统</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">用户管理系统</div>
+        <div class="nav-menu">
+            <a href="/" class="nav-link">首页</a>
+            <a href="/welcome" class="nav-link">欢迎页</a>
+            <a href="/feedback" class="nav-link">反馈</a>
+        </div>
+    </nav>
+    <main class="container">
+        <div class="card">
+            <h2>{{ name }} 的反馈：</h2>
+            <p>{{ message }}</p>
+            <div style="margin-top: 20px; text-align: center;">
+                <a href="/feedback" class="btn btn-outline">继续反馈</a>
+                <a href="/" class="btn btn-primary" style="margin-left: 10px;">返回首页</a>
+            </div>
+        </div>
+    </main>
+</body>
+</html>"""
+        return render_template_string(html, name=name, message=message)
+
+    # GET 显示反馈表单
+    html = """<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>反馈 - 用户管理系统</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">用户管理系统</div>
+        <div class="nav-menu">
+            <a href="/" class="nav-link">首页</a>
+            <a href="/welcome" class="nav-link">欢迎页</a>
+            <a href="/feedback" class="nav-link">反馈</a>
+        </div>
+    </nav>
+    <main class="container">
+        <div class="card">
+            <h2 class="card-title">意见反馈</h2>
+            <form method="POST" action="/feedback">
+                <div class="form-group">
+                    <label for="name">姓名</label>
+                    <input type="text" id="name" name="name" class="form-input" placeholder="请输入您的姓名" required>
+                </div>
+                <div class="form-group">
+                    <label for="message">留言</label>
+                    <textarea id="message" name="message" class="form-input" rows="5" placeholder="请输入您的意见和建议" required></textarea>
+                </div>
+                <button type="submit" class="btn btn-primary btn-full">提交反馈</button>
+            </form>
+        </div>
+    </main>
+</body>
+</html>"""
+    return render_template_string(html)
 
 
 # ============================================================
