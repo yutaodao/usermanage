@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Ping 测试 - 用户管理系统{% endblock %}
+{% block content %}
+<div class="card">
+    <h2 class="card-title">Ping 网络诊断</h2>
+    <form method="POST" action="/ping">
+        <div class="search-box">
+            <input type="text" name="ip" class="form-input search-input" placeholder="输入 IP 地址或域名，如 8.8.8.8" required>
+            <button type="submit" class="btn btn-primary">Ping</button>
+        </div>
+    </form>
+
+    {% if result is not none %}
+    <div style="margin-top: 20px;">
+        <div class="ping-console">
+            <pre>{{ result }}</pre>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

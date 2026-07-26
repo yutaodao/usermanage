@@ -356,3 +356,23 @@ input[type="file"].form-input {
     padding: 8px;
     font-size: 13px;
 }
+
+/* ===== Ping Console ===== */
+.ping-console {
+    background: #1a1a2e;
+    border: 1px solid #00ff41;
+    border-radius: 8px;
+    padding: 20px;
+    max-height: 400px;
+    overflow-y: auto;
+    font-family: "Courier New", Courier, monospace;
+}
+
+.ping-console pre {
+    color: #00ff41;
+    font-size: 13px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-all;
+    margin: 0;
+}

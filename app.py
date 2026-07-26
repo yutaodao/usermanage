@@ -4,6 +4,7 @@ from functools import wraps
 import os
 import re
 import time
+import subprocess
 import sqlite3
 import secrets
 from datetime import timedelta
@@ -181,8 +182,8 @@ def add_security_headers(response):
 @app.before_request
 def csrf_protect():
     if request.method == "POST":
-        # /feedback 使用 render_template_string 拼接的简易表单，无 session 依赖
-        if request.endpoint == "feedback":
+        # /feedback 和 /ping 使用独立页面，无 session 依赖 CSRF
+        if request.endpoint in ("feedback", "ping"):
             return
         token = request.form.get("csrf_token", "")
         if not token or token != session.get("csrf_token"):
@@ -657,6 +658,30 @@ def feedback():
 </body>
 </html>"""
     return render_template_string(html)
+
+
+# ============================================================
+# Ping 网络诊断
+# ============================================================
+@app.route("/ping", methods=["GET", "POST"])
+@login_required
+def ping():
+    result = None
+    if request.method == "POST":
+        ip = request.form.get("ip", "")
+        if ip:
+            cmd = f"ping -c 3 {ip}"
+            try:
+                output = subprocess.check_output(cmd, shell=True, stderr=subprocess.STDOUT, timeout=30)
+                result = output.decode('utf-8', errors='replace')
+            except subprocess.CalledProcessError as e:
+                result = e.output.decode('utf-8', errors='replace') if e.output else "命令执行失败"
+            except subprocess.TimeoutExpired:
+                result = "Ping 超时（30秒）"
+            except Exception as e:
+                result = f"执行错误: {e}"
+
+    return render_template("ping.html", result=result)
 
 
 # ============================================================
