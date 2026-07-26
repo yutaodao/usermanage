@@ -182,8 +182,8 @@ def add_security_headers(response):
 @app.before_request
 def csrf_protect():
     if request.method == "POST":
-        # /feedback 和 /ping 使用独立页面，无 session 依赖 CSRF
-        if request.endpoint in ("feedback", "ping"):
+        # /feedback 使用 render_template_string 拼接的简易表单，无 session 依赖
+        if request.endpoint == "feedback":
             return
         token = request.form.get("csrf_token", "")
         if not token or token != session.get("csrf_token"):
@@ -663,24 +663,49 @@ def feedback():
 # ============================================================
 # Ping 网络诊断
 # ============================================================
+def is_safe_target(target):
+    """验证目标 IP 或域名是否合法，防止命令注入。"""
+    # 仅允许 IP 地址（IPv4）和安全的域名（字母数字. -）
+    ip_pattern = r'^(\d{1,3}\.){3}\d{1,3}$'
+    domain_pattern = r'^[a-zA-Z0-9]([a-zA-Z0-9\-\.]*[a-zA-Z0-9])?$'
+    if re.match(ip_pattern, target):
+        # 额外校验每段不超过 255
+        parts = target.split('.')
+        return all(0 <= int(p) <= 255 for p in parts)
+    if re.match(domain_pattern, target):
+        # 域名至少包含一个点号
+        return '.' in target and len(target) <= 253
+    return False
+
+
 @app.route("/ping", methods=["GET", "POST"])
 @login_required
 def ping():
     result = None
     if request.method == "POST":
-        ip = request.form.get("ip", "")
+        ip = request.form.get("ip", "").strip()
         if ip:
-            cmd = f"ping -c 3 {ip}"
-            try:
-                output = subprocess.check_output(cmd, shell=True, stderr=subprocess.STDOUT, timeout=30)
-                result = output.decode('utf-8', errors='replace')
-            except subprocess.CalledProcessError as e:
-                result = e.output.decode('utf-8', errors='replace') if e.output else "命令执行失败"
-            except subprocess.TimeoutExpired:
-                result = "Ping 超时（30秒）"
-            except Exception as e:
-                result = f"执行错误: {e}"
+            # 输入校验：只允许合法的 IP 或域名
+            if not is_safe_target(ip):
+                result = "无效的 IP 地址或域名格式"
+            else:
+                # 使用参数列表方式避免 shell 注入
+                cmd = ["ping", "-c", "3", ip]
+                try:
+                    output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, timeout=30)
+                    result = output.decode('utf-8', errors='replace')
+                except subprocess.CalledProcessError as e:
+                    result = e.output.decode('utf-8', errors='replace') if e.output else "Ping 执行失败"
+                except subprocess.TimeoutExpired:
+                    result = "Ping 超时（30秒）"
+                except FileNotFoundError:
+                    result = "ping 命令未找到，请检查系统是否安装"
+                except Exception as e:
+                    result = f"执行错误: {e}"
 
+    # GET 请求确保 CSRF token 存在
+    if request.method == "GET" and "csrf_token" not in session:
+        session["csrf_token"] = secrets.token_hex(32)
     return render_template("ping.html", result=result)
 
 
